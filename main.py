@@ -176,4 +176,31 @@ class GpuWorkspacePolicy(sky.AdminPolicy):
         k8s_config["pod_config"] = merged_pod_config
         mutated_config["kubernetes"] = k8s_config
 
-        return sky.MutatedUserRequest(user_request.task, mutated_config)
+        # Also inject labels via the task's resources so they are applied when the pod
+        # is created (API server may not use mutated_config when building the pod).
+        # 1) Resource labels — on K8s these map to pod labels.
+        # 2) cluster_config_overrides — inject pod_config.metadata.labels so they
+        #    are merged into the config used for pod creation.
+        task = user_request.task
+        extra_labels = {"sapCode": workspace_id, "jobName": cluster_name}
+        pod_config_override = {
+            "metadata": {"labels": extra_labels},
+        }
+
+        new_resources_list = []
+        for res in list(task.resources):
+            # Merge our labels into resource labels (task-level labels become pod labels on K8s)
+            existing_labels = dict(res.labels) if res.labels else {}
+            new_labels = {**existing_labels, **extra_labels}
+            # Merge our pod_config into cluster_config_overrides so pod creation sees it
+            existing_overrides = dict(res.cluster_config_overrides) if res.cluster_config_overrides else {}
+            k8s_overrides = existing_overrides.get("kubernetes", {}) or {}
+            existing_pod = k8s_overrides.get("pod_config", {}) or {}
+            merged_pod = copy.deepcopy(existing_pod)
+            config_utils.merge_k8s_configs(merged_pod, pod_config_override)
+            new_k8s = {**k8s_overrides, "pod_config": merged_pod}
+            new_overrides = {**existing_overrides, "kubernetes": new_k8s}
+            new_resources_list.append(res.copy(labels=new_labels, _cluster_config_overrides=new_overrides))
+        task.set_resources(type(task.resources)(new_resources_list))
+
+        return sky.MutatedUserRequest(task, mutated_config)
