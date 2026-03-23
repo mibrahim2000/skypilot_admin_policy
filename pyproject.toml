@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "skypilot-admin-policy"
 version = "0.1.0"
-description = "SkyPilot admin policy: labels (sapCode, jobName), nodeSelector, affinity, tolerations for Kubernetes"
+description = "SkyPilot admin policy: require workload-type Kubernetes pod toleration (SAP code)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -15,5 +15,5 @@ dependencies = [
 [tool.setuptools]
 py-modules = ["main"]
 
-[tool.uv]
-dev-dependencies = []
+[dependency-groups]
+dev = []
