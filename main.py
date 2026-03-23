@@ -68,6 +68,15 @@ def _operator_is_equal(op) -> bool:
     return str(op).strip().lower() == "equal"
 
 
+def _is_kubernetes_resources(resources: dict) -> bool:
+    """SkyPilot uses `infra` in serialized resource config; older paths may use `cloud`."""
+    for key in ("cloud", "infra"):
+        val = resources.get(key)
+        if val is not None and str(val).startswith("kubernetes"):
+            return True
+    return False
+
+
 def _has_workload_type_toleration(tolerations: list[dict]) -> bool:
     for t in tolerations:
         if t.get("key") != WORKLOAD_TYPE_KEY:
@@ -88,8 +97,7 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
     @classmethod
     def validate_and_mutate(cls, user_request: sky.UserRequest) -> sky.MutatedUserRequest:
         resources = user_request.task.get_resource_config()
-        cloud = str(resources.get("cloud", "") or "")
-        if not cloud.startswith("kubernetes"):
+        if not _is_kubernetes_resources(resources):
             return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)
 
         tolerations = _collect_tolerations(user_request)
