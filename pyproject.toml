@@ -16,4 +16,15 @@ dependencies = [
 py-modules = ["main"]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+# SkyPilot and transitive deps emit these at import time when tests load `main` → `sky`.
+filterwarnings = [
+    "ignore::sqlalchemy.exc.MovedIn20Warning",
+    "ignore::DeprecationWarning:passlib",
+]
