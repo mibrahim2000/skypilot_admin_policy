@@ -1,15 +1,19 @@
-"""SkyPilot admin policy: require Kubernetes SAP code toleration and label."""
+"""SkyPilot admin policy: require SAP labels and node-pool toleration on Kubernetes tasks."""
 
 import sky
 from sky import exceptions
 
-# Taint key users must tolerate with their SAP code (see cluster / node-pool setup).
-WORKLOAD_TYPE_KEY = "workload-type"
+# Pod labels: SAP code (uppercase) and Kueue queue name (lowercase SAP code).
 SAP_CODE_LABEL_KEY = "sapCode"
+KUEUE_QUEUE_LABEL_KEY = "kueue.x-k8s.io/queue-name"
 
-_REJECTION = """Skypilot jobs must declare both:
-- a workload-type toleration with your SAP code
-- a sapCode Kubernetes label with your SAP code
+# Node pool taint users must tolerate (see cluster / GPU node-pool setup).
+NODE_POOL_KEY = "node-pool"
+
+_REJECTION = """Skypilot Kubernetes jobs must declare:
+- metadata.labels.sapCode (your SAP code, uppercase)
+- metadata.labels.kueue.x-k8s.io/queue-name (your SAP code, lowercase)
+- a node-pool toleration choosing the GPU pool (Equal, NoSchedule, non-empty value)
 
 Add under SkyPilot config (e.g. task `config:` or ~/.sky/config.yaml), for example:
 
@@ -18,17 +22,29 @@ config:
     pod_config:
       metadata:
         labels:
-          sapCode: <YOUR-SAP-CODE>
+          sapCode: <YOUR-SAP-CODE-IN-UPPERCASE>
+          kueue.x-k8s.io/queue-name: <your-sap-code-in-lowercase>
       spec:
         tolerations:
-          - key: workload-type
+          # Choose the node pool based on the GPU you want:
+          # - H200: value: gpu-nvidia-h200
+          # - A10G: value: gpu-nvidia-a10g
+          # - L4:   value: gpu-nvidia-l4
+          - key: node-pool
             operator: Equal
-            value: <YOUR-SAP-CODE>
+            value: gpu-nvidia-a10g
             effect: NoSchedule
 
+          # H200 only (add this extra toleration):
+          # - key: workload-type
+          #   operator: Equal
+          #   value: kueue
+          #   effect: NoSchedule
+
 Required entries:
-- toleration: key=workload-type, operator=Equal, effect=NoSchedule, value non-empty
-- label: metadata.labels.sapCode non-empty"""
+- labels: sapCode non-empty and all uppercase; kueue.x-k8s.io/queue-name non-empty and all lowercase;
+  both must be the same SAP code (case-insensitive match)
+- toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty"""
 
 
 def _tolerations_from_pod_config(pod_config: dict | None) -> list:
@@ -107,6 +123,14 @@ def _collect_labels(user_request: sky.UserRequest) -> list[dict]:
     return found
 
 
+def _merged_labels(labels_list: list[dict]) -> dict:
+    merged: dict = {}
+    for labels in labels_list:
+        if isinstance(labels, dict):
+            merged.update(labels)
+    return merged
+
+
 def _operator_is_equal(op) -> bool:
     if op is None:
         return True
@@ -122,9 +146,9 @@ def _is_kubernetes_resources(resources: dict) -> bool:
     return False
 
 
-def _has_workload_type_toleration(tolerations: list[dict]) -> bool:
+def _has_node_pool_toleration(tolerations: list[dict]) -> bool:
     for t in tolerations:
-        if t.get("key") != WORKLOAD_TYPE_KEY:
+        if t.get("key") != NODE_POOL_KEY:
             continue
         if not _operator_is_equal(t.get("operator")):
             continue
@@ -136,16 +160,33 @@ def _has_workload_type_toleration(tolerations: list[dict]) -> bool:
     return False
 
 
-def _has_sap_code_label(labels_list: list[dict]) -> bool:
-    for labels in labels_list:
-        value = labels.get(SAP_CODE_LABEL_KEY)
-        if value is not None and str(value).strip():
-            return True
-    return False
+def _is_all_uppercase(value: str) -> bool:
+    s = str(value).strip()
+    return bool(s) and s == s.upper()
+
+
+def _is_all_lowercase(value: str) -> bool:
+    s = str(value).strip()
+    return bool(s) and s == s.lower()
+
+
+def _has_sap_labels(labels_list: list[dict]) -> bool:
+    merged = _merged_labels(labels_list)
+    sap = merged.get(SAP_CODE_LABEL_KEY)
+    queue = merged.get(KUEUE_QUEUE_LABEL_KEY)
+    if sap is None or queue is None:
+        return False
+    if not _is_all_uppercase(sap):
+        return False
+    if not _is_all_lowercase(queue):
+        return False
+    if str(sap).strip().lower() != str(queue).strip().lower():
+        return False
+    return True
 
 
 class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
-    """Rejects Kubernetes tasks without required SAP code toleration and label."""
+    """Rejects Kubernetes tasks missing required SAP labels or node-pool toleration."""
 
     @classmethod
     def validate_and_mutate(cls, user_request: sky.UserRequest) -> sky.MutatedUserRequest:
@@ -155,7 +196,7 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
 
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
-        if _has_workload_type_toleration(tolerations) and _has_sap_code_label(labels):
+        if _has_node_pool_toleration(tolerations) and _has_sap_labels(labels):
             return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)
 
         raise exceptions.UserRequestRejectedByPolicy(_REJECTION)
