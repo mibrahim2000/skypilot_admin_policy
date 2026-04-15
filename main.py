@@ -9,11 +9,18 @@ KUEUE_QUEUE_LABEL_KEY = "kueue.x-k8s.io/queue-name"
 
 # Node pool taint users must tolerate (see cluster / GPU node-pool setup).
 NODE_POOL_KEY = "node-pool"
+NODE_POOL_H200_VALUE = "gpu-nvidia-h200"
+
+# H200 node pool also requires tolerating workload-type=kueue (see cluster taints).
+WORKLOAD_TYPE_KEY = "workload-type"
+WORKLOAD_TYPE_KUEUE_VALUE = "kueue"
 
 _REJECTION = """Skypilot Kubernetes jobs must declare:
 - metadata.labels.sapCode (your SAP code, uppercase)
 - metadata.labels.kueue.x-k8s.io/queue-name (your SAP code, lowercase)
 - a node-pool toleration choosing the GPU pool (Equal, NoSchedule, non-empty value)
+- if node-pool value is gpu-nvidia-h200 (H200), an additional workload-type toleration:
+  key=workload-type, operator=Equal, value=kueue, effect=NoSchedule
 
 Add under SkyPilot config (e.g. task `config:` or ~/.sky/config.yaml), for example:
 
@@ -35,7 +42,7 @@ config:
             value: gpu-nvidia-a10g
             effect: NoSchedule
 
-          # H200 only (add this extra toleration):
+          # Required only when node-pool value is gpu-nvidia-h200 (H200):
           # - key: workload-type
           #   operator: Equal
           #   value: kueue
@@ -44,7 +51,8 @@ config:
 Required entries:
 - labels: sapCode non-empty and all uppercase; kueue.x-k8s.io/queue-name non-empty and all lowercase;
   both must be the same SAP code (case-insensitive match)
-- toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty"""
+- toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty
+- H200: when node-pool value is gpu-nvidia-h200, also require workload-type=kueue (Equal, NoSchedule)"""
 
 
 def _tolerations_from_pod_config(pod_config: dict | None) -> list:
@@ -160,6 +168,42 @@ def _has_node_pool_toleration(tolerations: list[dict]) -> bool:
     return False
 
 
+def _selects_h200_node_pool(tolerations: list[dict]) -> bool:
+    for t in tolerations:
+        if t.get("key") != NODE_POOL_KEY:
+            continue
+        if not _operator_is_equal(t.get("operator")):
+            continue
+        if t.get("effect") != "NoSchedule":
+            continue
+        val = t.get("value")
+        if val is not None and str(val).strip() == NODE_POOL_H200_VALUE:
+            return True
+    return False
+
+
+def _has_workload_type_kueue_toleration(tolerations: list[dict]) -> bool:
+    for t in tolerations:
+        if t.get("key") != WORKLOAD_TYPE_KEY:
+            continue
+        if not _operator_is_equal(t.get("operator")):
+            continue
+        if t.get("effect") != "NoSchedule":
+            continue
+        val = t.get("value")
+        if val is not None and str(val).strip() == WORKLOAD_TYPE_KUEUE_VALUE:
+            return True
+    return False
+
+
+def _tolerations_pass(tolerations: list[dict]) -> bool:
+    if not _has_node_pool_toleration(tolerations):
+        return False
+    if _selects_h200_node_pool(tolerations) and not _has_workload_type_kueue_toleration(tolerations):
+        return False
+    return True
+
+
 def _is_all_uppercase(value: str) -> bool:
     s = str(value).strip()
     return bool(s) and s == s.upper()
@@ -186,7 +230,7 @@ def _has_sap_labels(labels_list: list[dict]) -> bool:
 
 
 class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
-    """Rejects Kubernetes tasks missing required SAP labels or node-pool toleration."""
+    """Rejects Kubernetes tasks missing required SAP labels, node-pool toleration, or H200 kueue toleration."""
 
     @classmethod
     def validate_and_mutate(cls, user_request: sky.UserRequest) -> sky.MutatedUserRequest:
@@ -196,7 +240,7 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
 
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
-        if _has_node_pool_toleration(tolerations) and _has_sap_labels(labels):
+        if _tolerations_pass(tolerations) and _has_sap_labels(labels):
             return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)
 
         raise exceptions.UserRequestRejectedByPolicy(_REJECTION)
