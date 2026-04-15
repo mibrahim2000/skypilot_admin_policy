@@ -1,4 +1,4 @@
-"""SkyPilot admin policy: require SAP labels and node-pool toleration on Kubernetes tasks."""
+"""SkyPilot admin policy: require SAP labels and node-pool toleration (CPU or GPU pools) on Kubernetes tasks."""
 
 import sky
 from sky import exceptions
@@ -7,7 +7,7 @@ from sky import exceptions
 SAP_CODE_LABEL_KEY = "sapCode"
 KUEUE_QUEUE_LABEL_KEY = "kueue.x-k8s.io/queue-name"
 
-# Node pool taint users must tolerate (see cluster / GPU node-pool setup).
+# Node pool taint users must tolerate (see cluster docs for CPU vs GPU pool values).
 NODE_POOL_KEY = "node-pool"
 NODE_POOL_H200_VALUE = "gpu-nvidia-h200"
 
@@ -18,9 +18,12 @@ WORKLOAD_TYPE_KUEUE_VALUE = "kueue"
 _REJECTION = """Skypilot Kubernetes jobs must declare:
 - metadata.labels.sapCode (your SAP code, uppercase)
 - metadata.labels.kueue.x-k8s.io/queue-name (your SAP code, lowercase)
-- a node-pool toleration choosing the GPU pool (Equal, NoSchedule, non-empty value)
+- a node-pool toleration (Equal, NoSchedule, non-empty value) that matches the pool you need:
+  - CPU-only workloads: use your cluster's CPU node-pool value (see internal cluster / node-pool docs).
+  - GPU workloads: pick the GPU pool (examples below). CPU pools do not use these gpu-nvidia-* values.
 - if node-pool value is gpu-nvidia-h200 (H200), an additional workload-type toleration:
   key=workload-type, operator=Equal, value=kueue, effect=NoSchedule
+  (Not required for CPU node pools or for other GPU pools such as A10G or L4.)
 
 Add under SkyPilot config (e.g. task `config:`), for example:
 
@@ -33,7 +36,8 @@ config:
           kueue.x-k8s.io/queue-name: <your-sap-code-in-lowercase>
       spec:
         tolerations:
-          # Choose the node pool based on the GPU you want:
+          # Set node-pool to the taint value for the pool you use. Examples:
+          # - CPU:  value: cpu-only
           # - H200: value: gpu-nvidia-h200
           # - A10G: value: gpu-nvidia-a10g
           # - L4:   value: gpu-nvidia-l4
@@ -42,7 +46,7 @@ config:
             value: gpu-nvidia-a10g
             effect: NoSchedule
 
-          # Required only when node-pool value is gpu-nvidia-h200 (H200):
+          # Required only when node-pool value is gpu-nvidia-h200 (H200 GPU pool):
           # - key: workload-type
           #   operator: Equal
           #   value: kueue
@@ -51,8 +55,8 @@ config:
 Required entries:
 - labels: sapCode non-empty and all uppercase; kueue.x-k8s.io/queue-name non-empty and all lowercase;
   both must be the same SAP code (case-insensitive match)
-- toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty
-- H200: when node-pool value is gpu-nvidia-h200, also require workload-type=kueue (Equal, NoSchedule)"""
+- toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty (CPU or GPU pool value from your cluster)
+- H200 GPU only: when node-pool value is gpu-nvidia-h200, also require workload-type=kueue (Equal, NoSchedule)"""
 
 
 def _tolerations_from_pod_config(pod_config: dict | None) -> list:
