@@ -22,7 +22,7 @@ _REJECTION = """Skypilot Kubernetes jobs must declare:
 - if node-pool value is gpu-nvidia-h200 (H200), an additional workload-type toleration:
   key=workload-type, operator=Equal, value=kueue, effect=NoSchedule
 
-Add under SkyPilot config (e.g. task `config:` or ~/.sky/config.yaml), for example:
+Add under SkyPilot config (e.g. task `config:`), for example:
 
 config:
   kubernetes:
