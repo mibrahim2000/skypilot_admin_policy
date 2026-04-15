@@ -23,7 +23,8 @@ _REJECTION = """Skypilot Kubernetes jobs must declare:
   - GPU workloads: pick the GPU pool (examples below). CPU pools do not use these gpu-nvidia-* values.
 - if node-pool value is gpu-nvidia-h200 (H200), an additional workload-type toleration:
   key=workload-type, operator=Equal, value=kueue, effect=NoSchedule
-  (Not required for CPU node pools or for other GPU pools such as A10G or L4.)
+  (Only when H200 is the targeted pool. Not required for cpu-only, A10G, L4, or any other node-pool value.
+  If merged global config lists both H200 and another node-pool, the non-H200 entry exempts this rule.)
 
 Add under SkyPilot config (e.g. task `config:`), for example:
 
@@ -56,7 +57,7 @@ Required entries:
 - labels: sapCode non-empty and all uppercase; kueue.x-k8s.io/queue-name non-empty and all lowercase;
   both must be the same SAP code (case-insensitive match)
 - toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty (CPU or GPU pool value from your cluster)
-- H200 GPU only: when node-pool value is gpu-nvidia-h200, also require workload-type=kueue (Equal, NoSchedule)"""
+- H200 only: require workload-type=kueue only when the targeted node-pool is gpu-nvidia-h200 (not for other GPU types or CPU)"""
 
 
 def _tolerations_from_pod_config(pod_config: dict | None) -> list:
@@ -172,6 +173,27 @@ def _has_node_pool_toleration(tolerations: list[dict]) -> bool:
     return False
 
 
+def _has_non_h200_node_pool_toleration(tolerations: list[dict]) -> bool:
+    """True if any node-pool toleration targets a pool other than H200 (CPU, A10G, L4, ...).
+
+    Used so merged config cannot force the H200 workload-type rule when the task also specifies
+    a different node-pool value.
+    """
+    for t in tolerations:
+        if t.get("key") != NODE_POOL_KEY:
+            continue
+        if not _operator_is_equal(t.get("operator")):
+            continue
+        if t.get("effect") != "NoSchedule":
+            continue
+        val = t.get("value")
+        if val is None or not str(val).strip():
+            continue
+        if str(val).strip() != NODE_POOL_H200_VALUE:
+            return True
+    return False
+
+
 def _selects_h200_node_pool(tolerations: list[dict]) -> bool:
     for t in tolerations:
         if t.get("key") != NODE_POOL_KEY:
@@ -203,6 +225,8 @@ def _has_workload_type_kueue_toleration(tolerations: list[dict]) -> bool:
 def _tolerations_pass(tolerations: list[dict]) -> bool:
     if not _has_node_pool_toleration(tolerations):
         return False
+    if _has_non_h200_node_pool_toleration(tolerations):
+        return True
     if _selects_h200_node_pool(tolerations) and not _has_workload_type_kueue_toleration(tolerations):
         return False
     return True
