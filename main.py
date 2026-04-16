@@ -1,7 +1,8 @@
-"""SkyPilot admin policy: require SAP labels and node-pool toleration (CPU or GPU pools) on Kubernetes tasks."""
+"""SkyPilot admin policy: restrict direct ``sky launch``, require SAP labels and node-pool toleration on Kubernetes."""
 
 import sky
 from sky import exceptions
+from sky.server.requests import request_names
 
 # Pod labels: SAP code (uppercase) and Kueue queue name (lowercase SAP code).
 SAP_CODE_LABEL_KEY = "sapCode"
@@ -14,6 +15,14 @@ NODE_POOL_H200_VALUE = "gpu-nvidia-h200"
 # H200 node pool also requires tolerating workload-type=kueue (see cluster taints).
 WORKLOAD_TYPE_KEY = "workload-type"
 WORKLOAD_TYPE_KUEUE_VALUE = "kueue"
+
+_DIRECT_LAUNCH_REJECTION = """Direct ``sky launch`` is disabled on this SkyPilot API server.
+
+Use managed jobs instead:
+
+  sky jobs launch <your_task.yaml>
+
+``sky exec`` on existing clusters and workloads started via ``sky jobs launch`` (including controller-provisioned clusters) are unchanged."""
 
 _REJECTION = """Skypilot Kubernetes jobs must declare:
 - metadata.labels.sapCode (your SAP code, uppercase)
@@ -258,10 +267,13 @@ def _has_sap_labels(labels_list: list[dict]) -> bool:
 
 
 class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
-    """Rejects Kubernetes tasks missing required SAP labels, node-pool toleration, or H200 kueue toleration."""
+    """Rejects direct ``sky launch``; rejects Kubernetes tasks missing SAP labels, node-pool toleration, or H200 kueue."""
 
     @classmethod
     def validate_and_mutate(cls, user_request: sky.UserRequest) -> sky.MutatedUserRequest:
+        if user_request.request_name == request_names.AdminPolicyRequestName.CLUSTER_LAUNCH:
+            raise exceptions.UserRequestRejectedByPolicy(_DIRECT_LAUNCH_REJECTION)
+
         resources = user_request.task.get_resource_config()
         if not _is_kubernetes_resources(resources):
             return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)

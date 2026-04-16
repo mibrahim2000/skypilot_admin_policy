@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from sky.server.requests import request_names
 
 import main
 
@@ -133,6 +134,9 @@ class TestValidateAndMutateIntegration:
         resource_config: dict,
         global_pod_config: dict | None,
         resource_overrides: dict | None,
+        request_name: request_names.AdminPolicyRequestName = (
+            request_names.AdminPolicyRequestName.OPTIMIZE
+        ),
     ) -> MagicMock:
         res = MagicMock()
         res.cluster_config_overrides = resource_overrides or {}
@@ -147,6 +151,7 @@ class TestValidateAndMutateIntegration:
         ur = MagicMock()
         ur.task = task
         ur.skypilot_config = cfg
+        ur.request_name = request_name
         return ur
 
     def test_non_kubernetes_always_accepts(self) -> None:
@@ -158,6 +163,36 @@ class TestValidateAndMutateIntegration:
         out = main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
         assert out.task is ur.task
         assert out.skypilot_config is ur.skypilot_config
+
+    def test_cluster_launch_rejected_even_for_aws(self) -> None:
+        ur = self._make_request(
+            resource_config={"cloud": "aws"},
+            global_pod_config=None,
+            resource_overrides=None,
+            request_name=request_names.AdminPolicyRequestName.CLUSTER_LAUNCH,
+        )
+        with pytest.raises(main.exceptions.UserRequestRejectedByPolicy) as exc:
+            main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+        assert "sky jobs launch" in str(exc.value).lower()
+
+    def test_jobs_launch_cluster_allowed_with_valid_kubernetes_pod(self) -> None:
+        pod = {
+            "metadata": {
+                "labels": {
+                    "sapCode": "FOO",
+                    "kueue.x-k8s.io/queue-name": "foo",
+                }
+            },
+            "spec": {"tolerations": [_np("gpu-nvidia-a10g")]},
+        }
+        ur = self._make_request(
+            resource_config={"infra": "kubernetes"},
+            global_pod_config=None,
+            resource_overrides={"kubernetes": {"pod_config": pod}},
+            request_name=request_names.AdminPolicyRequestName.JOBS_LAUNCH_CLUSTER,
+        )
+        out = main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+        assert out.task is ur.task
 
     def test_kubernetes_passes_with_overrides_only(self) -> None:
         pod = {
