@@ -298,8 +298,8 @@ class TestGetSapTeamMembers:
         mock_resp.json.return_value = {
             "d": {
                 "results": [
-                    {"BusinessPartner": "alice@example.com"},
-                    {"BusinessPartner": "bob@example.com"},
+                    {"StaffedEmployeeName": "alice@example.com"},
+                    {"StaffedEmployeeName": "bob@example.com"},
                 ]
             }
         }
@@ -310,7 +310,7 @@ class TestGetSapTeamMembers:
             members = main._get_sap_team_members("MYPROJ")
 
         assert len(members) == 2
-        assert members[0]["BusinessPartner"] == "alice@example.com"
+        assert members[0]["StaffedEmployeeName"] == "alice@example.com"
 
     @patch("main.requests.get")
     def test_user_in_sap_team_matches_case_insensitive(self, mock_get) -> None:
@@ -318,7 +318,7 @@ class TestGetSapTeamMembers:
         mock_resp.json.return_value = {
             "d": {
                 "results": [
-                    {"BusinessPartner": "Alice@Example.COM"},
+                    {"StaffedEmployeeName": "Alice@Example.COM"},
                 ]
             }
         }
@@ -334,7 +334,7 @@ class TestGetSapTeamMembers:
         mock_resp.json.return_value = {
             "d": {
                 "results": [
-                    {"BusinessPartner": "bob@example.com"},
+                    {"StaffedEmployeeName": "bob@example.com"},
                 ]
             }
         }

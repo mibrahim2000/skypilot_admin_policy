@@ -22,8 +22,8 @@ WORKLOAD_TYPE_KUEUE_VALUE = "kueue"
 
 # SAP API configuration (credentials via SAP_API_USER / SAP_API_PASSWORD env vars).
 SAP_API_HOST = os.environ.get("SAP_API_HOST", "https://my416299-api.s4hana.cloud.sap")
-SAP_TEAM_MEMBER_PATH = "/sap/opu/odata/sap/API_ENTERPRISE_PROJECT_SRV_0002/A_EnterpriseProjectTeamMember"
-SAP_USER_MATCH_FIELD = os.environ.get("SAP_USER_MATCH_FIELD", "BusinessPartner")
+SAP_STAFFING_PATH = "/sap/opu/odata/CPD/SC_EXTERNAL_SERVICES_SRV/StaffingDataSet"
+SAP_USER_MATCH_FIELD = os.environ.get("SAP_USER_MATCH_FIELD", "StaffedEmployeeName")
 
 logger = logging.getLogger(__name__)
 
@@ -298,9 +298,9 @@ def _get_sap_team_members(sap_code: str) -> list[dict]:
             "Set SAP_API_USER and SAP_API_PASSWORD environment variables."
         )
 
-    url = f"{SAP_API_HOST}{SAP_TEAM_MEMBER_PATH}"
+    url = f"{SAP_API_HOST}{SAP_STAFFING_PATH}"
     params = {
-        "$filter": f"EnterpriseProject eq '{sap_code}'",
+        "$filter": f"ProjectID eq '{sap_code}'",
         "$format": "json",
     }
     resp = requests.get(url, params=params, auth=(api_user, api_password), timeout=30)
