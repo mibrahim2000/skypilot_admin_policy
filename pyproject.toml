@@ -9,6 +9,7 @@ description = "SkyPilot admin policy: require workload-type Kubernetes pod toler
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "requests>=2.28",
     "skypilot[aws,kubernetes]>=0.11.2",
 ]
 

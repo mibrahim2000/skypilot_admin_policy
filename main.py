@@ -1,5 +1,9 @@
 """SkyPilot admin policy: restrict direct ``sky launch``, require SAP labels and node-pool toleration on Kubernetes."""
 
+import logging
+import os
+
+import requests
 import sky
 from sky import exceptions
 from sky.server.requests import request_names
@@ -15,6 +19,13 @@ NODE_POOL_H200_VALUE = "gpu-nvidia-h200"
 # H200 node pool also requires tolerating workload-type=kueue (see cluster taints).
 WORKLOAD_TYPE_KEY = "workload-type"
 WORKLOAD_TYPE_KUEUE_VALUE = "kueue"
+
+# SAP API configuration (credentials via SAP_API_USER / SAP_API_PASSWORD env vars).
+SAP_API_HOST = os.environ.get("SAP_API_HOST", "https://my416299-api.s4hana.cloud.sap")
+SAP_TEAM_MEMBER_PATH = "/sap/opu/odata/sap/API_ENTERPRISE_PROJECT_SRV_0002/A_EnterpriseProjectTeamMember"
+SAP_USER_MATCH_FIELD = os.environ.get("SAP_USER_MATCH_FIELD", "BusinessPartner")
+
+logger = logging.getLogger(__name__)
 
 _DIRECT_LAUNCH_REJECTION = """Direct ``sky launch`` is disabled on this SkyPilot API server.
 
@@ -67,6 +78,17 @@ Required entries:
   both must be the same SAP code (case-insensitive match)
 - toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty (CPU or GPU pool value from your cluster)
 - H200 only: require workload-type=kueue only when the targeted node-pool is gpu-nvidia-h200 (not for other GPU types or CPU)"""
+
+_SAP_TEAM_REJECTION = """SAP team membership validation failed.
+
+The user '{user}' is not a member of the SAP EnterpriseProject team '{sap_code}'.
+
+Ensure that:
+1. Your sapCode label matches a valid SAP EnterpriseProject code.
+2. Your user account is registered as a team member in the SAP project.
+3. The SAP API credentials (SAP_API_USER / SAP_API_PASSWORD) are correctly configured on the server.
+
+Contact your platform team if you believe this is an error."""
 
 
 def _tolerations_from_pod_config(pod_config: dict | None) -> list:
@@ -266,6 +288,53 @@ def _has_sap_labels(labels_list: list[dict]) -> bool:
     return True
 
 
+def _get_sap_team_members(sap_code: str) -> list[dict]:
+    """Fetch team members for the given EnterpriseProject from the SAP OData API."""
+    api_user = os.environ.get("SAP_API_USER")
+    api_password = os.environ.get("SAP_API_PASSWORD")
+    if not api_user or not api_password:
+        raise RuntimeError(
+            "SAP API credentials not configured. "
+            "Set SAP_API_USER and SAP_API_PASSWORD environment variables."
+        )
+
+    url = f"{SAP_API_HOST}{SAP_TEAM_MEMBER_PATH}"
+    params = {
+        "$filter": f"EnterpriseProject eq '{sap_code}'",
+        "$format": "json",
+    }
+    resp = requests.get(url, params=params, auth=(api_user, api_password), timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    # OData v2 envelope: {"d": {"results": [...]}}
+    return data.get("d", {}).get("results", [])
+
+
+def _user_in_sap_team(user: str, sap_code: str) -> bool:
+    """Return True if *user* is a member of the SAP EnterpriseProject team for *sap_code*."""
+    try:
+        members = _get_sap_team_members(sap_code)
+    except Exception as e:
+        logger.error("SAP team lookup failed for project %r: %s", sap_code, e)
+        # Fail closed: if we cannot verify membership, reject.
+        return False
+
+    match_field = SAP_USER_MATCH_FIELD
+    user_normalised = user.strip().lower()
+
+    for member in members:
+        value = member.get(match_field)
+        if value is not None and str(value).strip().lower() == user_normalised:
+            return True
+
+    logger.info(
+        "User %r not found in SAP team %r (field=%r, %d members). "
+        "Available member data: %s",
+        user, sap_code, match_field, len(members), members,
+    )
+    return False
+
+
 class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
     """Rejects direct ``sky launch``; rejects Kubernetes tasks missing SAP labels, node-pool toleration, or H200 kueue."""
 
@@ -280,7 +349,16 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
 
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
-        if _tolerations_pass(tolerations) and _has_sap_labels(labels):
-            return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)
+        if not (_tolerations_pass(tolerations) and _has_sap_labels(labels)):
+            raise exceptions.UserRequestRejectedByPolicy(_REJECTION)
 
-        raise exceptions.UserRequestRejectedByPolicy(_REJECTION)
+        # SAP team membership validation.
+        merged = _merged_labels(labels)
+        sap_code = str(merged.get(SAP_CODE_LABEL_KEY, "")).strip()
+        user = user_request.user
+        if user and sap_code and not _user_in_sap_team(user, sap_code):
+            raise exceptions.UserRequestRejectedByPolicy(
+                _SAP_TEAM_REJECTION.format(user=user, sap_code=sap_code)
+            )
+
+        return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)

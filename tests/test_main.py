@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from sky.server.requests import request_names
@@ -152,6 +152,7 @@ class TestValidateAndMutateIntegration:
         ur.task = task
         ur.skypilot_config = cfg
         ur.request_name = request_name
+        ur.user = None  # Default: client-side (SAP check skipped).
         return ur
 
     def test_non_kubernetes_always_accepts(self) -> None:
@@ -228,3 +229,124 @@ class TestValidateAndMutateIntegration:
         )
         with pytest.raises(main.exceptions.UserRequestRejectedByPolicy):
             main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+
+
+class TestSapTeamMembership:
+    """Tests for the SAP API team membership validation."""
+
+    @staticmethod
+    def _make_k8s_request(
+        *,
+        sap_code: str = "FOO",
+        queue_name: str = "foo",
+        toleration_value: str = "gpu-nvidia-a10g",
+        user: str | None = "alice@example.com",
+    ) -> MagicMock:
+        pod = {
+            "metadata": {
+                "labels": {
+                    "sapCode": sap_code,
+                    "kueue.x-k8s.io/queue-name": queue_name,
+                }
+            },
+            "spec": {"tolerations": [_np(toleration_value)]},
+        }
+        res = MagicMock()
+        res.cluster_config_overrides = {"kubernetes": {"pod_config": pod}}
+
+        task = MagicMock()
+        task.resources = [res]
+        task.get_resource_config.return_value = {"infra": "kubernetes"}
+
+        cfg = MagicMock()
+        cfg.get_nested = MagicMock(return_value=None)
+
+        ur = MagicMock()
+        ur.task = task
+        ur.skypilot_config = cfg
+        ur.request_name = request_names.AdminPolicyRequestName.OPTIMIZE
+        ur.user = user
+        return ur
+
+    @patch("main._user_in_sap_team", return_value=True)
+    def test_user_in_team_passes(self, mock_fn) -> None:
+        ur = self._make_k8s_request(user="alice@example.com")
+        out = main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+        assert out.task is ur.task
+        mock_fn.assert_called_once_with("alice@example.com", "FOO")
+
+    @patch("main._user_in_sap_team", return_value=False)
+    def test_user_not_in_team_rejected(self, mock_fn) -> None:
+        ur = self._make_k8s_request(user="intruder@example.com")
+        with pytest.raises(main.exceptions.UserRequestRejectedByPolicy) as exc:
+            main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+        assert "SAP team membership" in str(exc.value)
+
+    def test_user_none_skips_sap_check(self) -> None:
+        """Client-side requests have user=None; SAP check should be skipped."""
+        ur = self._make_k8s_request(user=None)
+        out = main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+        assert out.task is ur.task
+
+
+class TestGetSapTeamMembers:
+    """Unit tests for _get_sap_team_members and _user_in_sap_team helpers."""
+
+    @patch("main.requests.get")
+    def test_parses_odata_v2_response(self, mock_get) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "d": {
+                "results": [
+                    {"BusinessPartner": "alice@example.com"},
+                    {"BusinessPartner": "bob@example.com"},
+                ]
+            }
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        with patch.dict("os.environ", {"SAP_API_USER": "u", "SAP_API_PASSWORD": "p"}):
+            members = main._get_sap_team_members("MYPROJ")
+
+        assert len(members) == 2
+        assert members[0]["BusinessPartner"] == "alice@example.com"
+
+    @patch("main.requests.get")
+    def test_user_in_sap_team_matches_case_insensitive(self, mock_get) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "d": {
+                "results": [
+                    {"BusinessPartner": "Alice@Example.COM"},
+                ]
+            }
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        with patch.dict("os.environ", {"SAP_API_USER": "u", "SAP_API_PASSWORD": "p"}):
+            assert main._user_in_sap_team("alice@example.com", "PROJ") is True
+
+    @patch("main.requests.get")
+    def test_user_not_in_sap_team(self, mock_get) -> None:
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "d": {
+                "results": [
+                    {"BusinessPartner": "bob@example.com"},
+                ]
+            }
+        }
+        mock_resp.raise_for_status = MagicMock()
+        mock_get.return_value = mock_resp
+
+        with patch.dict("os.environ", {"SAP_API_USER": "u", "SAP_API_PASSWORD": "p"}):
+            assert main._user_in_sap_team("alice@example.com", "PROJ") is False
+
+    def test_missing_credentials_fails_closed(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            # Ensure HOME is set so SkyPilot import doesn't break.
+            import os
+            os.environ["HOME"] = str(main.os.environ.get("HOME", "/tmp"))
+            assert main._user_in_sap_team("alice@example.com", "PROJ") is False
