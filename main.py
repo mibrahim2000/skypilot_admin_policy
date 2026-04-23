@@ -49,6 +49,9 @@ config:
         labels:
           sapCode: <YOUR-SAP-CODE-IN-UPPERCASE>
           kueue.x-k8s.io/queue-name: <your-sap-code-in-lowercase>
+        # H200 only: required annotation for Kueue podset topology
+        # annotations:
+        #  kueue.x-k8s.io/podset-required-topology: kubernetes.io/hostname
       spec:
         tolerations:
           # Set node-pool to the taint value for the pool you use. Examples:
@@ -67,8 +70,6 @@ config:
           #   value: kueue
           #   effect: NoSchedule
 
-          # H200 only: under metadata.annotations (same pod_config):
-          #   kueue.x-k8s.io/podset-required-topology: kubernetes.io/hostname
 
 Required entries:
 - labels: sapCode non-empty and all uppercase; kueue.x-k8s.io/queue-name non-empty and all lowercase;
