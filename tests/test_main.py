@@ -32,6 +32,26 @@ def _h200_topology_annotations() -> dict:
     return {main.KUEUE_PODSET_TOPOLOGY_ANNOTATION_KEY: main.KUEUE_PODSET_TOPOLOGY_ANNOTATION_VALUE}
 
 
+class TestRequestUserIdentity:
+    def test_plain_string_trimmed(self) -> None:
+        assert main._request_user_identity("  alice@corp  ") == "alice@corp"
+
+    def test_none(self) -> None:
+        assert main._request_user_identity(None) is None
+
+    def test_sky_models_user_prefers_name(self) -> None:
+        from sky.models import User
+
+        u = User(id="user-hash", name="alice@corp.com")
+        assert main._request_user_identity(u) == "alice@corp.com"
+
+    def test_sky_models_user_falls_back_to_id(self) -> None:
+        from sky.models import User
+
+        u = User(id="only-hash", name=None)
+        assert main._request_user_identity(u) == "only-hash"
+
+
 class TestHasNodePoolToleration:
     def test_accepts_equal_noschedule_non_empty_value(self) -> None:
         tol = [_np("cpu-only")]

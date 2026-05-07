@@ -375,6 +375,29 @@ def _get_sap_team_members(sap_code: str) -> list[dict]:
     return data.get("d", {}).get("results", [])
 
 
+def _request_user_identity(user: object | None) -> str | None:
+    """Normalize ``UserRequest.user`` for SAP membership checks.
+
+    On the SkyPilot API server, ``user`` is a ``sky.models.User`` (``id``, ``name``).
+    Plain strings are still accepted for tests and compatibility.
+    """
+    if user is None:
+        return None
+    if isinstance(user, str):
+        stripped = user.strip()
+        return stripped or None
+    name = getattr(user, "name", None)
+    if isinstance(name, str):
+        stripped = name.strip()
+        if stripped:
+            return stripped
+    uid = getattr(user, "id", None)
+    if isinstance(uid, str):
+        stripped = uid.strip()
+        return stripped or None
+    return None
+
+
 def _user_in_sap_team(user: str, sap_code: str) -> bool:
     """Return True if *user* is a member of the SAP EnterpriseProject team for *sap_code*."""
     try:
@@ -426,10 +449,10 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
         # SAP team membership validation.
         merged = _merged_labels(labels)
         sap_code = str(merged.get(SAP_CODE_LABEL_KEY, "")).strip()
-        user = user_request.user
-        if user and sap_code and not _user_in_sap_team(user, sap_code):
+        user_identity = _request_user_identity(user_request.user)
+        if user_identity and sap_code and not _user_in_sap_team(user_identity, sap_code):
             raise exceptions.UserRequestRejectedByPolicy(
-                _SAP_TEAM_REJECTION.format(user=user, sap_code=sap_code)
+                _SAP_TEAM_REJECTION.format(user=user_identity, sap_code=sap_code)
             )
 
         return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)
