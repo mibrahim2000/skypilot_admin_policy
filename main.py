@@ -414,15 +414,14 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
 
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
-        if not (_tolerations_pass(tolerations) and _has_sap_labels(labels)):
+        tolerations_ok = _tolerations_pass(tolerations)
+        labels_ok = _has_sap_labels(labels)
+        if not (tolerations_ok and labels_ok):
             raise exceptions.UserRequestRejectedByPolicy(_REJECTION)
+
         merged_annotations = _shallow_merge_dicts(_collect_annotations(user_request))
-        if (
-            _tolerations_pass(tolerations)
-            and _has_sap_labels(labels)
-            and _h200_annotation_pass(tolerations, merged_annotations)
-        ):
-            return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)
+        if not _h200_annotation_pass(tolerations, merged_annotations):
+            raise exceptions.UserRequestRejectedByPolicy(_REJECTION)
 
         # SAP team membership validation.
         merged = _merged_labels(labels)

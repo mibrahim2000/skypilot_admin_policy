@@ -233,7 +233,7 @@ class TestValidateAndMutateIntegration:
                 ]
             },
         }
-        ur = self._make_request(
+        ur = TestValidateAndMutateIntegration._make_request(
             resource_config={"infra": "kubernetes"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
@@ -246,7 +246,7 @@ class TestValidateAndMutateIntegration:
             "metadata": {"labels": {}},
             "spec": {"tolerations": [_np("cpu-only")]},
         }
-        ur = self._make_request(
+        ur = TestValidateAndMutateIntegration._make_request(
             resource_config={"infra": "kubernetes"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
@@ -389,7 +389,7 @@ class TestGetSapTeamMembers:
                 ]
             },
         }
-        ur = self._make_request(
+        ur = TestValidateAndMutateIntegration._make_request(
             resource_config={"infra": "kubernetes"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
@@ -413,7 +413,7 @@ class TestGetSapTeamMembers:
                 ]
             },
         }
-        ur = self._make_request(
+        ur = TestValidateAndMutateIntegration._make_request(
             resource_config={"infra": "kubernetes"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
@@ -436,7 +436,7 @@ class TestGetSapTeamMembers:
                 ]
             },
         }
-        ur = self._make_request(
+        ur = TestValidateAndMutateIntegration._make_request(
             resource_config={"infra": "kubernetes"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
