@@ -16,6 +16,10 @@ NODE_POOL_H200_VALUE = "gpu-nvidia-h200"
 WORKLOAD_TYPE_KEY = "workload-type"
 WORKLOAD_TYPE_KUEUE_VALUE = "kueue"
 
+# H200: Kueue podset topology annotation (required with H200 node-pool when no other node-pool applies).
+KUEUE_PODSET_TOPOLOGY_ANNOTATION_KEY = "kueue.x-k8s.io/podset-required-topology"
+KUEUE_PODSET_TOPOLOGY_ANNOTATION_VALUE = "kubernetes.io/hostname"
+
 _DIRECT_LAUNCH_REJECTION = """Direct ``sky launch`` is disabled on this SkyPilot API server.
 
 Use managed jobs instead:
@@ -32,6 +36,7 @@ _REJECTION = """Skypilot Kubernetes jobs must declare:
   - GPU workloads: pick the GPU pool (examples below). CPU pools do not use these gpu-nvidia-* values.
 - if node-pool value is gpu-nvidia-h200 (H200), an additional workload-type toleration:
   key=workload-type, operator=Equal, value=kueue, effect=NoSchedule
+  and metadata.annotations kueue.x-k8s.io/podset-required-topology: kubernetes.io/hostname
   (Only when H200 is the targeted pool. Not required for cpu-only, A10G, L4, or any other node-pool value.
   If merged global config lists both H200 and another node-pool, the non-H200 entry exempts this rule.)
 
@@ -44,6 +49,9 @@ config:
         labels:
           sapCode: <YOUR-SAP-CODE-IN-UPPERCASE>
           kueue.x-k8s.io/queue-name: <your-sap-code-in-lowercase>
+        # H200 only: required annotation for Kueue podset topology
+        # annotations:
+        #  kueue.x-k8s.io/podset-required-topology: kubernetes.io/hostname
       spec:
         tolerations:
           # Set node-pool to the taint value for the pool you use. Examples:
@@ -62,11 +70,12 @@ config:
           #   value: kueue
           #   effect: NoSchedule
 
+
 Required entries:
 - labels: sapCode non-empty and all uppercase; kueue.x-k8s.io/queue-name non-empty and all lowercase;
   both must be the same SAP code (case-insensitive match)
 - toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty (CPU or GPU pool value from your cluster)
-- H200 only: require workload-type=kueue only when the targeted node-pool is gpu-nvidia-h200 (not for other GPU types or CPU)"""
+- H200 only: require workload-type=kueue and the podset topology annotation above only when the targeted node-pool is gpu-nvidia-h200 (not for other GPU types or CPU)"""
 
 
 def _tolerations_from_pod_config(pod_config: dict | None) -> list:
@@ -145,12 +154,53 @@ def _collect_labels(user_request: sky.UserRequest) -> list[dict]:
     return found
 
 
-def _merged_labels(labels_list: list[dict]) -> dict:
+def _annotations_from_pod_config(pod_config: dict | None) -> dict:
+    if not isinstance(pod_config, dict):
+        return {}
+    metadata = pod_config.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return {}
+    annotations = metadata.get("annotations") or {}
+    return annotations if isinstance(annotations, dict) else {}
+
+
+def _collect_annotations(user_request: sky.UserRequest) -> list[dict]:
+    """Annotations from merged SkyPilot config and per-resource kubernetes.pod_config overrides."""
+    found: list[dict] = []
+
+    pod_global = user_request.skypilot_config.get_nested(("kubernetes", "pod_config"), None)
+    if isinstance(pod_global, dict):
+        ann = _annotations_from_pod_config(pod_global)
+        if ann:
+            found.append(ann)
+
+    for res in list(user_request.task.resources):
+        overrides = getattr(res, "cluster_config_overrides", None) or {}
+        if not isinstance(overrides, dict):
+            continue
+        k8s = overrides.get("kubernetes") or {}
+        if not isinstance(k8s, dict):
+            continue
+        pod = k8s.get("pod_config")
+        if not isinstance(pod, dict):
+            continue
+        ann = _annotations_from_pod_config(pod)
+        if ann:
+            found.append(ann)
+
+    return found
+
+
+def _shallow_merge_dicts(dict_layers: list[dict]) -> dict:
     merged: dict = {}
-    for labels in labels_list:
-        if isinstance(labels, dict):
-            merged.update(labels)
+    for d in dict_layers:
+        if isinstance(d, dict):
+            merged.update(d)
     return merged
+
+
+def _merged_labels(labels_list: list[dict]) -> dict:
+    return _shallow_merge_dicts(labels_list)
 
 
 def _operator_is_equal(op) -> bool:
@@ -241,6 +291,22 @@ def _tolerations_pass(tolerations: list[dict]) -> bool:
     return True
 
 
+def _has_podset_topology_annotation(merged_annotations: dict) -> bool:
+    val = merged_annotations.get(KUEUE_PODSET_TOPOLOGY_ANNOTATION_KEY)
+    if val is None:
+        return False
+    return str(val).strip() == KUEUE_PODSET_TOPOLOGY_ANNOTATION_VALUE
+
+
+def _h200_annotation_pass(tolerations: list[dict], merged_annotations: dict) -> bool:
+    """When H200 is the effective node pool, require kueue podset-required-topology annotation."""
+    if _has_non_h200_node_pool_toleration(tolerations):
+        return True
+    if not _selects_h200_node_pool(tolerations):
+        return True
+    return _has_podset_topology_annotation(merged_annotations)
+
+
 def _is_all_uppercase(value: str) -> bool:
     s = str(value).strip()
     return bool(s) and s == s.upper()
@@ -267,7 +333,7 @@ def _has_sap_labels(labels_list: list[dict]) -> bool:
 
 
 class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
-    """Rejects direct ``sky launch``; rejects Kubernetes tasks missing SAP labels, node-pool toleration, or H200 kueue."""
+    """Rejects direct ``sky launch``; rejects Kubernetes tasks missing SAP labels, node-pool toleration, H200 kueue toleration, or H200 topology annotation."""
 
     @classmethod
     def validate_and_mutate(cls, user_request: sky.UserRequest) -> sky.MutatedUserRequest:
@@ -280,7 +346,12 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
 
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
-        if _tolerations_pass(tolerations) and _has_sap_labels(labels):
+        merged_annotations = _shallow_merge_dicts(_collect_annotations(user_request))
+        if (
+            _tolerations_pass(tolerations)
+            and _has_sap_labels(labels)
+            and _h200_annotation_pass(tolerations, merged_annotations)
+        ):
             return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)
 
         raise exceptions.UserRequestRejectedByPolicy(_REJECTION)

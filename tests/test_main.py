@@ -28,6 +28,10 @@ def _wt_kueue(*, operator: str = "Equal", effect: str = "NoSchedule") -> dict:
     }
 
 
+def _h200_topology_annotations() -> dict:
+    return {main.KUEUE_PODSET_TOPOLOGY_ANNOTATION_KEY: main.KUEUE_PODSET_TOPOLOGY_ANNOTATION_VALUE}
+
+
 class TestHasNodePoolToleration:
     def test_accepts_equal_noschedule_non_empty_value(self) -> None:
         tol = [_np("cpu-only")]
@@ -98,6 +102,26 @@ class TestTolerationsPass:
 
     def test_no_node_pool_fails(self) -> None:
         assert main._tolerations_pass([_wt_kueue()]) is False
+
+
+class TestH200AnnotationPass:
+    def test_h200_requires_topology_annotation(self) -> None:
+        tols = [_np(main.NODE_POOL_H200_VALUE), _wt_kueue()]
+        assert main._h200_annotation_pass(tols, {}) is False
+        assert main._h200_annotation_pass(tols, _h200_topology_annotations()) is True
+
+    def test_h200_wrong_annotation_value_fails(self) -> None:
+        tols = [_np(main.NODE_POOL_H200_VALUE), _wt_kueue()]
+        bad = {main.KUEUE_PODSET_TOPOLOGY_ANNOTATION_KEY: "wrong"}
+        assert main._h200_annotation_pass(tols, bad) is False
+
+    def test_a10g_ignores_missing_annotation(self) -> None:
+        tols = [_np("gpu-nvidia-a10g")]
+        assert main._h200_annotation_pass(tols, {}) is True
+
+    def test_merged_h200_and_a10g_exempt(self) -> None:
+        tols = [_np(main.NODE_POOL_H200_VALUE), _np("gpu-nvidia-a10g")]
+        assert main._h200_annotation_pass(tols, {}) is True
 
 
 class TestHasSapLabels:
@@ -228,3 +252,73 @@ class TestValidateAndMutateIntegration:
         )
         with pytest.raises(main.exceptions.UserRequestRejectedByPolicy):
             main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+
+    def test_kubernetes_h200_without_topology_rejected(self) -> None:
+        pod = {
+            "metadata": {
+                "labels": {
+                    "sapCode": "FOO",
+                    "kueue.x-k8s.io/queue-name": "foo",
+                }
+            },
+            "spec": {
+                "tolerations": [
+                    _np(main.NODE_POOL_H200_VALUE),
+                    _wt_kueue(),
+                ]
+            },
+        }
+        ur = self._make_request(
+            resource_config={"infra": "kubernetes"},
+            global_pod_config=None,
+            resource_overrides={"kubernetes": {"pod_config": pod}},
+        )
+        with pytest.raises(main.exceptions.UserRequestRejectedByPolicy):
+            main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+
+    def test_kubernetes_h200_with_topology_accepted(self) -> None:
+        pod = {
+            "metadata": {
+                "labels": {
+                    "sapCode": "FOO",
+                    "kueue.x-k8s.io/queue-name": "foo",
+                },
+                "annotations": _h200_topology_annotations(),
+            },
+            "spec": {
+                "tolerations": [
+                    _np(main.NODE_POOL_H200_VALUE),
+                    _wt_kueue(),
+                ]
+            },
+        }
+        ur = self._make_request(
+            resource_config={"infra": "kubernetes"},
+            global_pod_config=None,
+            resource_overrides={"kubernetes": {"pod_config": pod}},
+        )
+        out = main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+        assert out.task is ur.task
+
+    def test_kubernetes_h200_plus_a10g_no_topology_ok(self) -> None:
+        pod = {
+            "metadata": {
+                "labels": {
+                    "sapCode": "FOO",
+                    "kueue.x-k8s.io/queue-name": "foo",
+                }
+            },
+            "spec": {
+                "tolerations": [
+                    _np(main.NODE_POOL_H200_VALUE),
+                    _np("gpu-nvidia-a10g"),
+                ]
+            },
+        }
+        ur = self._make_request(
+            resource_config={"infra": "kubernetes"},
+            global_pod_config=None,
+            resource_overrides={"kubernetes": {"pod_config": pod}},
+        )
+        out = main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
+        assert out.task is ur.task
