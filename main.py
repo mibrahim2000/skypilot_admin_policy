@@ -1,5 +1,8 @@
 """SkyPilot admin policy: restrict direct ``sky launch``, require SAP labels and node-pool toleration on Kubernetes."""
 
+import json
+import logging
+
 import sky
 from sky import exceptions
 from sky.server.requests import request_names
@@ -238,10 +241,16 @@ def _operator_is_equal(op) -> bool:
 
 def _is_kubernetes_resources(resources: dict) -> bool:
     """SkyPilot uses `infra` in serialized resource config; older paths may use `cloud`."""
-    for key in ("cloud", "infra"):
-        val = resources.get(key)
-        if val is not None and str(val).startswith("kubernetes"):
-            return True
+    candidates = [resources, resources.get("resources") or {}]
+    for d in candidates:
+        if not isinstance(d, dict):
+            continue
+        for key in ("cloud", "infra"):
+            val = d.get(key)
+            if val is not None:
+                s_val = str(val).strip()
+                if s_val.startswith("kubernetes") or s_val.startswith("k8s/"):
+                    return True
     return False
 
 
@@ -360,13 +369,28 @@ def _has_sap_labels(labels_list: list[dict]) -> bool:
 
 
 def _extract_kubernetes_context(resources: dict) -> str | None:
-    """Extract the Kubernetes context name from the resource config, if any."""
-    for key in ("cloud", "infra"):
-        val = resources.get(key)
-        if val is not None and str(val).startswith("kubernetes"):
-            parts = str(val).split(":", 1)
-            if len(parts) == 2 and parts[1].strip():
-                return parts[1].strip()
+    """Extract the Kubernetes context name from the resource config, if any.
+
+    ``get_resource_config()`` may nest the infra/cloud key under a ``resources``
+    sub-dict, so we check both the top-level dict and that nested dict.
+    """
+    candidates = [resources, resources.get("resources") or {}]
+    for d in candidates:
+        if not isinstance(d, dict):
+            continue
+        for key in ("infra", "cloud"):
+            val = d.get(key)
+            if val is None:
+                continue
+            s_val = str(val).strip()
+            # Handle "kubernetes:<context>" format
+            if s_val.startswith("kubernetes:"):
+                parts = s_val.split(":", 1)
+                if len(parts) == 2 and parts[1].strip():
+                    return parts[1].strip()
+            # Handle "k8s/" prefix or direct context names
+            if s_val.startswith("k8s/") or s_val in CLUSTER_GPU_RESTRICTIONS:
+                return s_val
     return None
 
 
@@ -434,6 +458,8 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
 
     @classmethod
     def validate_and_mutate(cls, user_request: sky.UserRequest) -> sky.MutatedUserRequest:
+        logger = logging.getLogger(__name__)
+
         if user_request.request_name == request_names.AdminPolicyRequestName.CLUSTER_LAUNCH:
             raise exceptions.UserRequestRejectedByPolicy(_DIRECT_LAUNCH_REJECTION)
 
@@ -444,13 +470,32 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
         merged_annotations = _shallow_merge_dicts(_collect_annotations(user_request))
+        context = _extract_kubernetes_context(resources)
+
+        # --- Debug dump ---
+        logger.info(
+            "[AdminPolicy] Incoming request dump:\n"
+            "  request_name: %s\n"
+            "  resource_config: %s\n"
+            "  extracted_context: %s\n"
+            "  tolerations: %s\n"
+            "  labels: %s\n"
+            "  merged_annotations: %s\n"
+            "  gpu_node_pool_values: %s",
+            user_request.request_name,
+            json.dumps(resources, indent=2, default=str),
+            context,
+            json.dumps(tolerations, indent=2, default=str),
+            json.dumps(labels, indent=2, default=str),
+            json.dumps(merged_annotations, indent=2, default=str),
+            _get_gpu_node_pool_values(tolerations),
+        )
 
         # Rule: blocked SAP codes
         if _is_blocked_sap_code(labels):
             raise exceptions.UserRequestRejectedByPolicy(_BLOCKED_SAP_CODE_REJECTION)
 
         # Rule: cluster-specific GPU restrictions
-        context = _extract_kubernetes_context(resources)
         gpu_rejection = _validate_cluster_gpu_restrictions(context, tolerations)
         if gpu_rejection is not None:
             raise exceptions.UserRequestRejectedByPolicy(gpu_rejection)
