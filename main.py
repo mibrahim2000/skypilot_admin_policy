@@ -20,6 +20,21 @@ WORKLOAD_TYPE_KUEUE_VALUE = "kueue"
 KUEUE_PODSET_TOPOLOGY_ANNOTATION_KEY = "kueue.x-k8s.io/podset-required-topology"
 KUEUE_PODSET_TOPOLOGY_ANNOTATION_VALUE = "kubernetes.io/hostname"
 
+# Blocked SAP codes (case-insensitive). These codes cannot be used for any workloads.
+BLOCKED_SAP_CODES: set[str] = {"general-research-development"}
+
+# GPU node-pool toleration values.
+NODE_POOL_B200_VALUE = "gpu-nvidia-b200"
+NODE_POOL_L4_VALUE = "gpu-nvidia-l4"
+
+# Per-cluster GPU restrictions. Key: full Kubernetes context name.
+# Value: set of allowed GPU node-pool toleration values.
+# CPU-only node-pool values are always allowed regardless of cluster.
+CLUSTER_GPU_RESTRICTIONS: dict[str, set[str]] = {
+    "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2": {NODE_POOL_B200_VALUE},
+    "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2": {NODE_POOL_H200_VALUE, NODE_POOL_L4_VALUE},
+}
+
 _DIRECT_LAUNCH_REJECTION = """Direct ``sky launch`` is disabled on this SkyPilot API server.
 
 Use managed jobs instead:
@@ -76,6 +91,18 @@ Required entries:
   both must be the same SAP code (case-insensitive match)
 - toleration: key=node-pool, operator=Equal, effect=NoSchedule, value non-empty (CPU or GPU pool value from your cluster)
 - H200 only: require workload-type=kueue and the podset topology annotation above only when the targeted node-pool is gpu-nvidia-h200 (not for other GPU types or CPU)"""
+
+_BLOCKED_SAP_CODE_REJECTION = """The SAP code "GENERAL-RESEARCH-DEVELOPMENT" is not allowed for workloads.
+
+Please use a project-specific SAP code instead."""
+
+_CLUSTER_GPU_REJECTION = """GPU type not allowed on this cluster.
+
+Cluster: {cluster}
+Allowed GPU types: {allowed}
+Requested: {requested}
+
+Please select a GPU type that is available on your target cluster."""
 
 
 def _tolerations_from_pod_config(pod_config: dict | None) -> list:
@@ -332,6 +359,76 @@ def _has_sap_labels(labels_list: list[dict]) -> bool:
     return True
 
 
+def _extract_kubernetes_context(resources: dict) -> str | None:
+    """Extract the Kubernetes context name from the resource config, if any."""
+    for key in ("cloud", "infra"):
+        val = resources.get(key)
+        if val is not None and str(val).startswith("kubernetes"):
+            parts = str(val).split(":", 1)
+            if len(parts) == 2 and parts[1].strip():
+                return parts[1].strip()
+    return None
+
+
+def _get_gpu_node_pool_values(tolerations: list[dict]) -> list[str]:
+    """Return all GPU node-pool toleration values (values starting with 'gpu-')."""
+    values: list[str] = []
+    for t in tolerations:
+        if t.get("key") != NODE_POOL_KEY:
+            continue
+        if not _operator_is_equal(t.get("operator")):
+            continue
+        if t.get("effect") != "NoSchedule":
+            continue
+        val = t.get("value")
+        if val is not None and str(val).strip().startswith("gpu-"):
+            values.append(str(val).strip())
+    return values
+
+
+def _is_blocked_sap_code(labels_list: list[dict]) -> bool:
+    """True if the SAP code label matches any blocked SAP code."""
+    merged = _merged_labels(labels_list)
+    sap = merged.get(SAP_CODE_LABEL_KEY)
+    if sap is None:
+        return False
+    return str(sap).strip().lower() in BLOCKED_SAP_CODES
+
+
+def _validate_cluster_gpu_restrictions(context: str | None, tolerations: list[dict]) -> str | None:
+    """Return a rejection message if GPU selection violates cluster restrictions, else None."""
+    if context is None:
+        return None
+    ctx_lower = context.lower()
+
+    matching_cluster: str | None = None
+    allowed_gpus: set[str] | None = None
+    for cluster_ctx, gpus in CLUSTER_GPU_RESTRICTIONS.items():
+        if ctx_lower == cluster_ctx.lower():
+            matching_cluster = cluster_ctx
+            allowed_gpus = gpus
+            break
+
+    if matching_cluster is None or allowed_gpus is None:
+        return None
+
+    gpu_values = _get_gpu_node_pool_values(tolerations)
+    if not gpu_values:
+        return None  # No GPU tolerations -> nothing to restrict
+
+    disallowed = [v for v in gpu_values if v not in allowed_gpus]
+    if not disallowed:
+        return None
+
+    allowed_display = ", ".join(sorted(allowed_gpus))
+    disallowed_display = ", ".join(sorted(set(disallowed)))
+    return _CLUSTER_GPU_REJECTION.format(
+        cluster=matching_cluster,
+        allowed=allowed_display,
+        requested=disallowed_display,
+    )
+
+
 class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
     """Rejects direct ``sky launch``; rejects Kubernetes tasks missing SAP labels, node-pool toleration, H200 kueue toleration, or H200 topology annotation."""
 
@@ -347,6 +444,17 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
         merged_annotations = _shallow_merge_dicts(_collect_annotations(user_request))
+
+        # Rule: blocked SAP codes
+        if _is_blocked_sap_code(labels):
+            raise exceptions.UserRequestRejectedByPolicy(_BLOCKED_SAP_CODE_REJECTION)
+
+        # Rule: cluster-specific GPU restrictions
+        context = _extract_kubernetes_context(resources)
+        gpu_rejection = _validate_cluster_gpu_restrictions(context, tolerations)
+        if gpu_rejection is not None:
+            raise exceptions.UserRequestRejectedByPolicy(gpu_rejection)
+
         if (
             _tolerations_pass(tolerations)
             and _has_sap_labels(labels)
