@@ -239,18 +239,21 @@ def _operator_is_equal(op) -> bool:
     return str(op).strip().lower() == "equal"
 
 
-def _is_kubernetes_resources(resources: dict) -> bool:
-    """SkyPilot uses `infra` in serialized resource config; older paths may use `cloud`."""
-    candidates = [resources, resources.get("resources") or {}]
-    for d in candidates:
-        if not isinstance(d, dict):
-            continue
-        for key in ("cloud", "infra"):
-            val = d.get(key)
-            if val is not None:
-                s_val = str(val).strip()
-                if s_val.startswith("kubernetes") or s_val.startswith("k8s/"):
-                    return True
+def _is_kubernetes_resources(user_request: sky.UserRequest) -> bool:
+    """True if any resource in the task is a Kubernetes resource."""
+    for res in list(user_request.task.resources):
+        config = res.get_resource_config()
+        # Check both the resource config and any nested 'resources' dict
+        candidates = [config, config.get("resources") or {}]
+        for d in candidates:
+            if not isinstance(d, dict):
+                continue
+            for key in ("cloud", "infra"):
+                val = d.get(key)
+                if val is not None:
+                    s_val = str(val).strip()
+                    if s_val.startswith("kubernetes") or s_val.startswith("k8s/"):
+                        return True
     return False
 
 
@@ -368,29 +371,34 @@ def _has_sap_labels(labels_list: list[dict]) -> bool:
     return True
 
 
-def _extract_kubernetes_context(resources: dict) -> str | None:
-    """Extract the Kubernetes context name from the resource config, if any.
+def _extract_kubernetes_context(user_request: sky.UserRequest) -> str | None:
+    """Extract the Kubernetes context name from the task resources.
 
-    ``get_resource_config()`` may nest the infra/cloud key under a ``resources``
-    sub-dict, so we check both the top-level dict and that nested dict.
+    Iterates through all resources in the task and checks their config for
+    a Kubernetes context in the 'infra' or 'cloud' fields.
     """
-    candidates = [resources, resources.get("resources") or {}]
-    for d in candidates:
-        if not isinstance(d, dict):
-            continue
-        for key in ("infra", "cloud"):
-            val = d.get(key)
-            if val is None:
+    for res in list(user_request.task.resources):
+        config = res.get_resource_config()
+        candidates = [config, config.get("resources") or {}]
+        for d in candidates:
+            if not isinstance(d, dict):
                 continue
-            s_val = str(val).strip()
-            # Handle "kubernetes:<context>" format
-            if s_val.startswith("kubernetes:"):
-                parts = s_val.split(":", 1)
-                if len(parts) == 2 and parts[1].strip():
-                    return parts[1].strip()
-            # Handle "k8s/" prefix or direct context names
-            if s_val.startswith("k8s/") or s_val in CLUSTER_GPU_RESTRICTIONS:
-                return s_val
+            for key in ("infra", "cloud"):
+                val = d.get(key)
+                if val is None:
+                    continue
+                s_val = str(val).strip()
+                # Handle "kubernetes:<context>", "kubernetes/<context>", or "k8s/<context>"
+                for prefix in ("kubernetes:", "kubernetes/", "k8s/"):
+                    if s_val.startswith(prefix):
+                        ctx_name = s_val[len(prefix):].strip()
+                        # Standardize to "k8s/" prefix for matching with CLUSTER_GPU_RESTRICTIONS
+                        if ctx_name.startswith("k8s/"):
+                             return ctx_name
+                        return f"k8s/{ctx_name}"
+                # Handle direct context names
+                if s_val in CLUSTER_GPU_RESTRICTIONS:
+                    return s_val
     return None
 
 
@@ -463,27 +471,24 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
         if user_request.request_name == request_names.AdminPolicyRequestName.CLUSTER_LAUNCH:
             raise exceptions.UserRequestRejectedByPolicy(_DIRECT_LAUNCH_REJECTION)
 
-        resources = user_request.task.get_resource_config()
-        if not _is_kubernetes_resources(resources):
+        if not _is_kubernetes_resources(user_request):
             return sky.MutatedUserRequest(user_request.task, user_request.skypilot_config)
 
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
         merged_annotations = _shallow_merge_dicts(_collect_annotations(user_request))
-        context = _extract_kubernetes_context(resources)
+        context = _extract_kubernetes_context(user_request)
 
         # --- Debug dump ---
         logger.info(
             "[AdminPolicy] Incoming request dump:\n"
             "  request_name: %s\n"
-            "  resource_config: %s\n"
             "  extracted_context: %s\n"
             "  tolerations: %s\n"
             "  labels: %s\n"
             "  merged_annotations: %s\n"
             "  gpu_node_pool_values: %s",
             user_request.request_name,
-            json.dumps(resources, indent=2, default=str),
             context,
             json.dumps(tolerations, indent=2, default=str),
             json.dumps(labels, indent=2, default=str),

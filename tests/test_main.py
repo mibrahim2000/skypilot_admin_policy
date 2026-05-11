@@ -156,32 +156,52 @@ class TestIsBlockedSapCode:
 
 
 class TestExtractKubernetesContext:
+    @staticmethod
+    def _make_ur(resource_config: dict) -> MagicMock:
+        res = MagicMock()
+        res.get_resource_config.return_value = resource_config
+        task = MagicMock()
+        task.resources = [res]
+        ur = MagicMock()
+        ur.task = task
+        return ur
+
     def test_infra_with_context(self) -> None:
-        assert main._extract_kubernetes_context({"infra": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"}) == "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"
+        ur = self._make_ur({"infra": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"})
+        assert main._extract_kubernetes_context(ur) == "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"
 
     def test_cloud_with_context(self) -> None:
-        assert main._extract_kubernetes_context({"cloud": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"}) == "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
+        ur = self._make_ur({"cloud": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"})
+        assert main._extract_kubernetes_context(ur) == "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
+
+    def test_kubernetes_slash_prefix(self) -> None:
+        # Seen in USER logs
+        ur = self._make_ur({"infra": "kubernetes/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"})
+        assert main._extract_kubernetes_context(ur) == "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
 
     def test_nested_infra_with_context(self) -> None:
-        cfg = {"resources": {"infra": "kubernetes:my-ctx"}}
-        assert main._extract_kubernetes_context(cfg) == "my-ctx"
+        ur = self._make_ur({"resources": {"infra": "kubernetes:my-ctx"}})
+        assert main._extract_kubernetes_context(ur) == "k8s/my-ctx"
 
     def test_k8s_prefix(self) -> None:
         # Example from USER
         ctx = "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
-        assert main._extract_kubernetes_context({"infra": ctx}) == ctx
+        ur = self._make_ur({"infra": ctx})
+        assert main._extract_kubernetes_context(ur) == ctx
 
     def test_nested_k8s_prefix(self) -> None:
         # Example from USER in nested resources
         ctx = "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
-        cfg = {"resources": {"infra": ctx}}
-        assert main._extract_kubernetes_context(cfg) == ctx
+        ur = self._make_ur({"resources": {"infra": ctx}})
+        assert main._extract_kubernetes_context(ur) == ctx
 
     def test_no_context(self) -> None:
-        assert main._extract_kubernetes_context({"infra": "kubernetes"}) is None
+        ur = self._make_ur({"infra": "kubernetes"})
+        assert main._extract_kubernetes_context(ur) is None
 
     def test_non_kubernetes(self) -> None:
-        assert main._extract_kubernetes_context({"cloud": "aws"}) is None
+        ur = self._make_ur({"cloud": "aws"})
+        assert main._extract_kubernetes_context(ur) is None
 
 
 class TestGetGpuNodePoolValues:
@@ -236,23 +256,39 @@ class TestValidateClusterGpuRestrictions:
 
 
 class TestIsKubernetesResources:
+    @staticmethod
+    def _make_ur(resource_config: dict) -> MagicMock:
+        res = MagicMock()
+        res.get_resource_config.return_value = resource_config
+        task = MagicMock()
+        task.resources = [res]
+        ur = MagicMock()
+        ur.task = task
+        return ur
+
     def test_infra_kubernetes(self) -> None:
-        assert main._is_kubernetes_resources({"infra": "kubernetes"}) is True
+        ur = self._make_ur({"infra": "kubernetes"})
+        assert main._is_kubernetes_resources(ur) is True
 
     def test_cloud_kubernetes_prefix(self) -> None:
-        assert main._is_kubernetes_resources({"cloud": "kubernetes"}) is True
+        ur = self._make_ur({"cloud": "kubernetes"})
+        assert main._is_kubernetes_resources(ur) is True
 
     def test_nested_infra_kubernetes(self) -> None:
-        assert main._is_kubernetes_resources({"resources": {"infra": "kubernetes"}}) is True
+        ur = self._make_ur({"resources": {"infra": "kubernetes"}})
+        assert main._is_kubernetes_resources(ur) is True
 
     def test_k8s_prefix(self) -> None:
-        assert main._is_kubernetes_resources({"infra": "k8s/my-ctx"}) is True
+        ur = self._make_ur({"infra": "k8s/my-ctx"})
+        assert main._is_kubernetes_resources(ur) is True
 
     def test_nested_k8s_prefix(self) -> None:
-        assert main._is_kubernetes_resources({"resources": {"infra": "k8s/my-ctx"}}) is True
+        ur = self._make_ur({"resources": {"infra": "k8s/my-ctx"}})
+        assert main._is_kubernetes_resources(ur) is True
 
     def test_aws_skipped(self) -> None:
-        assert main._is_kubernetes_resources({"cloud": "aws"}) is False
+        ur = self._make_ur({"cloud": "aws"})
+        assert main._is_kubernetes_resources(ur) is False
 
 
 class TestValidateAndMutateIntegration:
@@ -270,6 +306,7 @@ class TestValidateAndMutateIntegration:
     ) -> MagicMock:
         res = MagicMock()
         res.cluster_config_overrides = resource_overrides or {}
+        res.get_resource_config.return_value = resource_config
 
         task = MagicMock()
         task.resources = [res]
