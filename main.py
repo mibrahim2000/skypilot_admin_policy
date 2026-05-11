@@ -241,19 +241,20 @@ def _operator_is_equal(op) -> bool:
 
 def _is_kubernetes_resources(user_request: sky.UserRequest) -> bool:
     """True if any resource in the task is a Kubernetes resource."""
-    for res in list(user_request.task.resources):
-        config = res.get_resource_config()
-        # Check both the resource config and any nested 'resources' dict
-        candidates = [config, config.get("resources") or {}]
-        for d in candidates:
-            if not isinstance(d, dict):
-                continue
-            for key in ("cloud", "infra"):
-                val = d.get(key)
-                if val is not None:
-                    s_val = str(val).strip()
-                    if s_val.startswith("kubernetes") or s_val.startswith("k8s/"):
-                        return True
+    resources = user_request.task.get_resource_config()
+    # Check top-level and any nested dicts (like 'resources' or index-based keys)
+    candidates = [resources]
+    for v in resources.values():
+        if isinstance(v, dict):
+            candidates.append(v)
+
+    for d in candidates:
+        for key in ("cloud", "infra"):
+            val = d.get(key)
+            if val is not None:
+                s_val = str(val).strip()
+                if s_val.startswith("kubernetes") or s_val.startswith("k8s/"):
+                    return True
     return False
 
 
@@ -372,33 +373,30 @@ def _has_sap_labels(labels_list: list[dict]) -> bool:
 
 
 def _extract_kubernetes_context(user_request: sky.UserRequest) -> str | None:
-    """Extract the Kubernetes context name from the task resources.
+    """Extract the Kubernetes context name from the task resources."""
+    resources = user_request.task.get_resource_config()
+    candidates = [resources]
+    for v in resources.values():
+        if isinstance(v, dict):
+            candidates.append(v)
 
-    Iterates through all resources in the task and checks their config for
-    a Kubernetes context in the 'infra' or 'cloud' fields.
-    """
-    for res in list(user_request.task.resources):
-        config = res.get_resource_config()
-        candidates = [config, config.get("resources") or {}]
-        for d in candidates:
-            if not isinstance(d, dict):
+    for d in candidates:
+        for key in ("infra", "cloud"):
+            val = d.get(key)
+            if val is None:
                 continue
-            for key in ("infra", "cloud"):
-                val = d.get(key)
-                if val is None:
-                    continue
-                s_val = str(val).strip()
-                # Handle "kubernetes:<context>", "kubernetes/<context>", or "k8s/<context>"
-                for prefix in ("kubernetes:", "kubernetes/", "k8s/"):
-                    if s_val.startswith(prefix):
-                        ctx_name = s_val[len(prefix):].strip()
-                        # Standardize to "k8s/" prefix for matching with CLUSTER_GPU_RESTRICTIONS
-                        if ctx_name.startswith("k8s/"):
-                             return ctx_name
-                        return f"k8s/{ctx_name}"
-                # Handle direct context names
-                if s_val in CLUSTER_GPU_RESTRICTIONS:
-                    return s_val
+            s_val = str(val).strip()
+            # Handle "kubernetes:<context>", "kubernetes/<context>", or "k8s/<context>"
+            for prefix in ("kubernetes:", "kubernetes/", "k8s/"):
+                if s_val.startswith(prefix):
+                    ctx_name = s_val[len(prefix):].strip()
+                    # Standardize to "k8s/" prefix for matching with CLUSTER_GPU_RESTRICTIONS
+                    if ctx_name.startswith("k8s/"):
+                        return ctx_name
+                    return f"k8s/{ctx_name}"
+            # Handle direct context names
+            if s_val in CLUSTER_GPU_RESTRICTIONS:
+                return s_val
     return None
 
 

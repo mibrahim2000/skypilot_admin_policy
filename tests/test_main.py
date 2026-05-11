@@ -158,10 +158,9 @@ class TestIsBlockedSapCode:
 class TestExtractKubernetesContext:
     @staticmethod
     def _make_ur(resource_config: dict) -> MagicMock:
-        res = MagicMock()
-        res.get_resource_config.return_value = resource_config
         task = MagicMock()
-        task.resources = [res]
+        task.get_resource_config.return_value = resource_config
+        task.resources = []
         ur = MagicMock()
         ur.task = task
         return ur
@@ -258,10 +257,9 @@ class TestValidateClusterGpuRestrictions:
 class TestIsKubernetesResources:
     @staticmethod
     def _make_ur(resource_config: dict) -> MagicMock:
-        res = MagicMock()
-        res.get_resource_config.return_value = resource_config
         task = MagicMock()
-        task.resources = [res]
+        task.get_resource_config.return_value = resource_config
+        task.resources = []
         ur = MagicMock()
         ur.task = task
         return ur
