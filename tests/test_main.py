@@ -239,8 +239,16 @@ class TestValidateClusterGpuRestrictions:
         assert result is not None
         assert "eus2" in result
 
-    def test_product_use1_allows_anything(self) -> None:
+    def test_product_use1_allows_l4(self) -> None:
+        assert main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-product-dev-hyperpod-use1"], ["l4"]) is None
+
+    def test_product_use1_allows_a10g(self) -> None:
         assert main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-product-dev-hyperpod-use1"], ["a10g"]) is None
+
+    def test_product_use1_rejects_h200(self) -> None:
+        result = main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-product-dev-hyperpod-use1"], ["h200"])
+        assert result is not None
+        assert "use1" in result
 
     def test_unknown_cluster_allows_anything(self) -> None:
         assert main._validate_cluster_gpu_restrictions(["my-other-cluster"], ["a10g"]) is None
