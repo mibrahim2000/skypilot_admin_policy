@@ -480,21 +480,7 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
 
         # --- Debug dump ---
         logger.info(
-            "[AdminPolicy] Incoming request dump:\n"
-            "  request_name: %s\n"
-            "  resource_config: %s\n"
-            "  extracted_context: %s\n"
-            "  tolerations: %s\n"
-            "  labels: %s\n"
-            "  merged_annotations: %s\n"
-            "  gpu_node_pool_values: %s",
-            user_request.request_name,
-            json.dumps(resources, indent=2, default=str),
-            context,
-            json.dumps(tolerations, indent=2, default=str),
-            json.dumps(labels, indent=2, default=str),
-            json.dumps(merged_annotations, indent=2, default=str),
-            _get_gpu_node_pool_values(tolerations),
+            user_request
         )
 
         # Rule: blocked SAP codes
