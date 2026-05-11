@@ -7,8 +7,8 @@ Rules:
 - Reject blocked workload types such as general_research_development.
 - Restrict GPU types by Kubernetes cluster:
   - research-dev-hyperpod-use1: no GPU restriction
-  - research-dev-hyperpod-eus2: only H200 or L4
-  - research-dev-hyperpod-usw2: only B200
+  - research-dev-hyperpod-eus2: only H200 or L4; product-dev-hyperpod-eus2: only L4
+  - research-dev-hyperpod-usw2, product-dev-hyperpod-usw2: only B200
 """
 
 import logging
@@ -67,6 +67,9 @@ CLUSTER_GPU_RESTRICTIONS: dict[str, set[str] | None] = {
     "research-dev-hyperpod-use1": None,
     "research-dev-hyperpod-eus2": {"h200", "l4"},
     "research-dev-hyperpod-usw2": {"b200"},
+    "product-dev-hyperpod-use1": None,
+    "product-dev-hyperpod-eus2": {"l4"},
+    "product-dev-hyperpod-usw2": {"b200"},
 }
 
 _DIRECT_LAUNCH_REJECTION = """Direct ``sky launch`` is disabled on this SkyPilot API server.
@@ -136,9 +139,10 @@ Allowed GPU types: {allowed}
 Requested: {requested}
 
 Cluster GPU policy:
-- research-dev-hyperpod-use1: no GPU restriction
+- research-dev-hyperpod-use1, product-dev-hyperpod-use1: no GPU restriction
 - research-dev-hyperpod-eus2: only H200 or L4
-- research-dev-hyperpod-usw2: only B200
+- product-dev-hyperpod-eus2: only L4
+- research-dev-hyperpod-usw2, product-dev-hyperpod-usw2: only B200
 
 Please select a GPU type that is available on your target cluster."""
 

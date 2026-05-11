@@ -138,24 +138,24 @@ class TestHasSapLabels:
         assert main._has_sap_labels(labels) is False
 
 
-class TestIsBlockedSapCode:
+class TestIsBlockedWorkloadType:
     def test_blocked_code_uppercase(self) -> None:
         labels = [{"sapCode": "GENERAL-RESEARCH-DEVELOPMENT", "kueue.x-k8s.io/queue-name": "general-research-development"}]
-        assert main._is_blocked_sap_code(labels) is True
+        assert main._is_blocked_workload_type(labels) is True
 
     def test_blocked_code_mixed_case(self) -> None:
         labels = [{"sapCode": "General-Research-Development"}]
-        assert main._is_blocked_sap_code(labels) is True
+        assert main._is_blocked_workload_type(labels) is True
 
     def test_allowed_code(self) -> None:
         labels = [{"sapCode": "FOO"}]
-        assert main._is_blocked_sap_code(labels) is False
+        assert main._is_blocked_workload_type(labels) is False
 
     def test_no_sap_code(self) -> None:
-        assert main._is_blocked_sap_code([{}]) is False
+        assert main._is_blocked_workload_type([{}]) is False
 
 
-class TestExtractKubernetesContext:
+class TestExtractKubernetesContexts:
     @staticmethod
     def _make_ur(resource_config: dict) -> MagicMock:
         task = MagicMock()
@@ -167,91 +167,89 @@ class TestExtractKubernetesContext:
 
     def test_infra_with_context(self) -> None:
         ur = self._make_ur({"infra": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"})
-        assert main._extract_kubernetes_context(ur) == "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"
+        assert main._extract_kubernetes_contexts(ur) == ["multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"]
 
     def test_cloud_with_context(self) -> None:
         ur = self._make_ur({"cloud": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"})
-        assert main._extract_kubernetes_context(ur) == "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
+        assert main._extract_kubernetes_contexts(ur) == ["multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"]
 
     def test_kubernetes_slash_prefix(self) -> None:
         # Seen in USER logs
         ur = self._make_ur({"infra": "kubernetes/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"})
-        assert main._extract_kubernetes_context(ur) == "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
+        assert main._extract_kubernetes_contexts(ur) == ["multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"]
 
     def test_nested_infra_with_context(self) -> None:
         ur = self._make_ur({"resources": {"infra": "kubernetes:my-ctx"}})
-        assert main._extract_kubernetes_context(ur) == "k8s/my-ctx"
+        assert main._extract_kubernetes_contexts(ur) == ["my-ctx"]
 
     def test_k8s_prefix(self) -> None:
         # Example from USER
         ctx = "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
         ur = self._make_ur({"infra": ctx})
-        assert main._extract_kubernetes_context(ur) == ctx
+        assert main._extract_kubernetes_contexts(ur) == ["multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"]
 
     def test_nested_k8s_prefix(self) -> None:
         # Example from USER in nested resources
         ctx = "k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"
         ur = self._make_ur({"resources": {"infra": ctx}})
-        assert main._extract_kubernetes_context(ur) == ctx
+        assert main._extract_kubernetes_contexts(ur) == ["multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"]
 
     def test_no_context(self) -> None:
         ur = self._make_ur({"infra": "kubernetes"})
-        assert main._extract_kubernetes_context(ur) is None
+        assert main._extract_kubernetes_contexts(ur) == ["kubernetes"]
 
     def test_non_kubernetes(self) -> None:
         ur = self._make_ur({"cloud": "aws"})
-        assert main._extract_kubernetes_context(ur) is None
+        assert main._extract_kubernetes_contexts(ur) == ["aws"]
 
 
-class TestGetGpuNodePoolValues:
-    def test_extracts_gpu_values(self) -> None:
-        tols = [_np("gpu-nvidia-b200"), _np("cpu-only")]
-        assert main._get_gpu_node_pool_values(tols) == ["gpu-nvidia-b200"]
-
-    def test_skips_cpu_values(self) -> None:
-        tols = [_np("cpu-only")]
-        assert main._get_gpu_node_pool_values(tols) == []
-
-    def test_empty(self) -> None:
-        assert main._get_gpu_node_pool_values([]) == []
+# Removed TestGetGpuNodePoolValues class as it is no longer relevant for the current main.py API.
 
 
 class TestValidateClusterGpuRestrictions:
     def test_usw2_allows_b200(self) -> None:
-        tols = [_np("gpu-nvidia-b200")]
-        assert main._validate_cluster_gpu_restrictions("k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2", tols) is None
+        assert main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"], ["b200"]) is None
 
     def test_usw2_rejects_h200(self) -> None:
-        tols = [_np(main.NODE_POOL_H200_VALUE)]
-        result = main._validate_cluster_gpu_restrictions("k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2", tols)
+        result = main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"], ["h200"])
         assert result is not None
         assert "usw2" in result
 
     def test_eus2_allows_h200(self) -> None:
-        tols = [_np(main.NODE_POOL_H200_VALUE)]
-        assert main._validate_cluster_gpu_restrictions("k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2", tols) is None
+        assert main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"], ["h200"]) is None
 
     def test_eus2_allows_l4(self) -> None:
-        tols = [_np("gpu-nvidia-l4")]
-        assert main._validate_cluster_gpu_restrictions("k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2", tols) is None
+        assert main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"], ["l4"]) is None
 
     def test_eus2_rejects_b200(self) -> None:
-        tols = [_np("gpu-nvidia-b200")]
-        result = main._validate_cluster_gpu_restrictions("k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2", tols)
+        result = main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"], ["b200"])
         assert result is not None
         assert "eus2" in result
 
+    def test_product_usw2_rejects_h200(self) -> None:
+        result = main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-product-dev-hyperpod-usw2"], ["h200"])
+        assert result is not None
+        assert "usw2" in result
+
+    def test_product_eus2_allows_l4(self) -> None:
+        assert main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-product-dev-hyperpod-eus2"], ["l4"]) is None
+
+    def test_product_eus2_rejects_h200(self) -> None:
+        result = main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-product-dev-hyperpod-eus2"], ["h200"])
+        assert result is not None
+        assert "eus2" in result
+
+    def test_product_use1_allows_anything(self) -> None:
+        assert main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-product-dev-hyperpod-use1"], ["a10g"]) is None
+
     def test_unknown_cluster_allows_anything(self) -> None:
-        tols = [_np("gpu-nvidia-a10g")]
-        assert main._validate_cluster_gpu_restrictions("my-other-cluster", tols) is None
+        assert main._validate_cluster_gpu_restrictions(["my-other-cluster"], ["a10g"]) is None
 
     def test_no_context_allows_anything(self) -> None:
-        tols = [_np("gpu-nvidia-a10g")]
-        assert main._validate_cluster_gpu_restrictions(None, tols) is None
+        assert main._validate_cluster_gpu_restrictions([], ["a10g"]) is None
 
     def test_cpu_only_always_allowed(self) -> None:
-        tols = [_np("cpu-only")]
-        assert main._validate_cluster_gpu_restrictions("k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2", tols) is None
+        assert main._validate_cluster_gpu_restrictions(["k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"], []) is None
 
 
 class TestIsKubernetesResources:
@@ -298,6 +296,7 @@ class TestValidateAndMutateIntegration:
         resource_config: dict,
         global_pod_config: dict | None,
         resource_overrides: dict | None,
+        accelerators: dict | str | None = None,
         request_name: request_names.AdminPolicyRequestName = (
             request_names.AdminPolicyRequestName.OPTIMIZE
         ),
@@ -305,6 +304,8 @@ class TestValidateAndMutateIntegration:
         res = MagicMock()
         res.cluster_config_overrides = resource_overrides or {}
         res.get_resource_config.return_value = resource_config
+        res.accelerators = accelerators
+        res.to_yaml_config.return_value = {**resource_config, "accelerators": accelerators}
 
         task = MagicMock()
         task.resources = [res]
@@ -481,7 +482,7 @@ class TestValidateAndMutateIntegration:
         )
         with pytest.raises(main.exceptions.UserRequestRejectedByPolicy) as exc:
             main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
-        assert "GENERAL-RESEARCH-DEVELOPMENT" in str(exc.value)
+        assert "RESEARCH_DEVELOPMENT" in str(exc.value)
 
     def test_usw2_cluster_rejects_h200(self) -> None:
         pod = {
@@ -497,6 +498,7 @@ class TestValidateAndMutateIntegration:
             resource_config={"infra": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
+            accelerators={"H200": 1},
         )
         with pytest.raises(main.exceptions.UserRequestRejectedByPolicy) as exc:
             main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
@@ -516,6 +518,7 @@ class TestValidateAndMutateIntegration:
             resource_config={"infra": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-usw2"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
+            accelerators={"B200": 1},
         )
         out = main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
         assert out.task is ur.task
@@ -534,6 +537,7 @@ class TestValidateAndMutateIntegration:
             resource_config={"infra": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
+            accelerators={"B200": 1},
         )
         with pytest.raises(main.exceptions.UserRequestRejectedByPolicy) as exc:
             main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
@@ -554,6 +558,7 @@ class TestValidateAndMutateIntegration:
             resource_config={"infra": "kubernetes:k8s/multiversecomputing.teleport.sh-research-dev-hyperpod-eus2"},
             global_pod_config=None,
             resource_overrides={"kubernetes": {"pod_config": pod}},
+            accelerators={"H200": 1},
         )
         out = main.WorkloadTypeTolerationPolicy.validate_and_mutate(ur)
         assert out.task is ur.task
