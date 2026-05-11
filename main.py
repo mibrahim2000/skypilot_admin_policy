@@ -475,18 +475,21 @@ class WorkloadTypeTolerationPolicy(sky.AdminPolicy):
         tolerations = _collect_tolerations(user_request)
         labels = _collect_labels(user_request)
         merged_annotations = _shallow_merge_dicts(_collect_annotations(user_request))
+        resources = user_request.task.get_resource_config()
         context = _extract_kubernetes_context(user_request)
 
         # --- Debug dump ---
         logger.info(
             "[AdminPolicy] Incoming request dump:\n"
             "  request_name: %s\n"
+            "  resource_config: %s\n"
             "  extracted_context: %s\n"
             "  tolerations: %s\n"
             "  labels: %s\n"
             "  merged_annotations: %s\n"
             "  gpu_node_pool_values: %s",
             user_request.request_name,
+            json.dumps(resources, indent=2, default=str),
             context,
             json.dumps(tolerations, indent=2, default=str),
             json.dumps(labels, indent=2, default=str),
